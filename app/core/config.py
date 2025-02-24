@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # Qdrant
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
+    QDRANT_GRPC_PORT: int = 6334
 
     # OpenAI
     OPENAI_API_KEY: str

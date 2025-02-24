@@ -29,10 +29,16 @@ class ChatService:
     @property
     def qdrant_client(self):
         if self._qdrant_client is None:
-            self._qdrant_client = QdrantClient(
-                host=app_settings.QDRANT_HOST, port=app_settings.QDRANT_PORT
-            )
-            self._init_collections()
+            try:
+                self._qdrant_client = QdrantClient(
+                    host=app_settings.QDRANT_HOST,
+                    port=app_settings.QDRANT_PORT,
+                    grpc_port=app_settings.QDRANT_GRPC_PORT,
+                    prefer_grpc=False,
+                )
+                self._init_collections()
+            except Exception as e:
+                raise Exception(f"Failed to connect to Qdrant: {str(e)}")
         return self._qdrant_client
 
     @property
@@ -95,30 +101,33 @@ class ChatService:
         now = datetime.utcnow()
 
         # Store chat metadata in Qdrant
-        self.qdrant_client.upsert(
-            collection_name="chats",
-            points=[
-                models.PointStruct(
-                    id=chat_id,
-                    vector=[0.0],  # Dummy vector
-                    payload={
-                        "title": chat.title,
-                        "description": chat.description,
-                        "created_at": now.isoformat(),
-                        "updated_at": now.isoformat(),
-                        "messages": [],
-                    },
-                )
-            ],
-        )
+        try:
+            self.qdrant_client.upsert(
+                collection_name="chats",
+                points=[
+                    models.PointStruct(
+                        id=chat_id,
+                        vector=[0.0],  # Dummy vector
+                        payload={
+                            "title": chat.title,
+                            "description": chat.description,
+                            "created_at": now.isoformat(),
+                            "updated_at": now.isoformat(),
+                            "messages": [],
+                        },
+                    )
+                ],
+            )
 
-        return ChatRead(
-            id=chat_id,
-            title=chat.title,
-            description=chat.description,
-            created_at=now,
-            updated_at=now,
-        )
+            return ChatRead(
+                id=chat_id,
+                title=chat.title,
+                description=chat.description,
+                created_at=now,
+                updated_at=now,
+            )
+        except Exception as e:
+            raise Exception(f"Failed to create chat: {str(e)}")
 
     async def list_chats(self) -> List[ChatRead]:
         """List all chats."""
@@ -239,24 +248,51 @@ class ChatService:
             created_at=now,
         )
 
+    def _refresh_index(self):
+        """Force a refresh of the index."""
+        self._index = None
+
     async def add_document(self, document: DocumentCreate) -> DocumentRead:
         """Add a document to the RAG system."""
         doc_id = str(uuid.uuid4())
         now = datetime.utcnow()
 
         try:
+            # Create document metadata
+            metadata = {
+                "id": doc_id,
+                "created_at": now.isoformat(),
+                **document.metadata,
+            }
+
             # Create document with metadata
             llama_doc = Document(
                 text=document.content,
-                metadata={
-                    "id": doc_id,
-                    "created_at": now.isoformat(),
-                    **document.metadata,
-                },
+                metadata=metadata,
             )
 
-            # Insert into index
+            # Get embeddings for the document
+            embed_model = self.embed_model
+            embeddings = embed_model.get_text_embedding(document.content)
+
+            # Store in Qdrant directly
+            self.qdrant_client.upsert(
+                collection_name="documents",
+                points=[
+                    models.PointStruct(
+                        id=doc_id,
+                        vector=embeddings,
+                        payload={
+                            "text": document.content,
+                            "metadata": metadata,
+                        },
+                    )
+                ],
+            )
+
+            # Also store in LlamaIndex for querying
             self.index.insert(llama_doc)
+            self._refresh_index()
 
             return DocumentRead(
                 id=doc_id,
@@ -270,6 +306,7 @@ class ChatService:
     async def list_documents(self) -> List[DocumentRead]:
         """List all documents."""
         try:
+            # Get all documents from the vector store
             response = self.qdrant_client.scroll(
                 collection_name="documents",
                 limit=100,  # Adjust as needed
@@ -279,22 +316,31 @@ class ChatService:
 
             documents = []
             for point in response[0]:
-                doc_metadata = point.payload.get("metadata", {})
-                if "id" in doc_metadata and "created_at" in doc_metadata:
-                    documents.append(
-                        DocumentRead(
-                            id=doc_metadata["id"],
-                            content=point.payload.get("text", ""),
-                            metadata={
-                                k: v
-                                for k, v in doc_metadata.items()
-                                if k not in ["id", "created_at"]
-                            },
-                            created_at=datetime.fromisoformat(
-                                doc_metadata["created_at"]
-                            ),
+                # Extract metadata from the payload
+                metadata = point.payload.get("metadata", {})
+                doc_id = metadata.get("id")
+                created_at_str = metadata.get("created_at")
+                
+                if doc_id and created_at_str:
+                    try:
+                        created_at = datetime.fromisoformat(created_at_str)
+                        # Filter out internal metadata
+                        filtered_metadata = {
+                            k: v for k, v in metadata.items() 
+                            if k not in ["id", "created_at"]
+                        }
+                        
+                        documents.append(
+                            DocumentRead(
+                                id=doc_id,
+                                content=point.payload.get("text", ""),
+                                metadata=filtered_metadata,
+                                created_at=created_at,
+                            )
                         )
-                    )
+                    except (ValueError, TypeError):
+                        continue  # Skip invalid documents
+                        
             return documents
         except Exception as e:
             raise ValueError(f"Failed to list documents: {str(e)}")
@@ -327,3 +373,81 @@ class ChatService:
             return documents
         except Exception as e:
             raise ValueError(f"Failed to search documents: {str(e)}")
+
+    async def delete_document(self, doc_id: str) -> bool:
+        """Delete a document from the RAG system."""
+        try:
+            # Delete from Qdrant
+            self.qdrant_client.delete(
+                collection_name="documents",
+                points_selector=models.PointIdsList(
+                    points=[doc_id]
+                ),
+            )
+
+            # Force index refresh to reflect changes
+            self._refresh_index()
+
+            return True
+        except Exception as e:
+            raise ValueError(f"Failed to delete document: {str(e)}")
+
+    async def update_document(self, doc_id: str, document: DocumentCreate) -> DocumentRead:
+        """Update an existing document in the RAG system."""
+        try:
+            # Check if document exists
+            response = self.qdrant_client.retrieve(
+                collection_name="documents",
+                ids=[doc_id],
+            )
+            if not response:
+                raise ValueError(f"Document with ID {doc_id} not found")
+
+            # Get existing metadata
+            existing_metadata = response[0].payload.get("metadata", {})
+            created_at_str = existing_metadata.get("created_at")
+            
+            # Create updated metadata
+            metadata = {
+                "id": doc_id,
+                "created_at": created_at_str,
+                **document.metadata,
+            }
+
+            # Create document with metadata
+            llama_doc = Document(
+                text=document.content,
+                metadata=metadata,
+            )
+
+            # Get embeddings for the document
+            embed_model = self.embed_model
+            embeddings = embed_model.get_text_embedding(document.content)
+
+            # Update in Qdrant
+            self.qdrant_client.upsert(
+                collection_name="documents",
+                points=[
+                    models.PointStruct(
+                        id=doc_id,
+                        vector=embeddings,
+                        payload={
+                            "text": document.content,
+                            "metadata": metadata,
+                        },
+                    )
+                ],
+            )
+
+            # Update in LlamaIndex
+            self.index.insert(llama_doc)
+            self._refresh_index()
+
+            return DocumentRead(
+                id=doc_id,
+                content=document.content,
+                metadata=document.metadata,
+                created_at=datetime.fromisoformat(created_at_str),
+            )
+        except Exception as e:
+            raise ValueError(f"Failed to update document: {str(e)}")

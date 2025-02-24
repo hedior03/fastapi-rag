@@ -18,13 +18,19 @@ chat_service = ChatService()
 @router.post("/chats/", response_model=ChatRead)
 async def create_chat(chat: ChatCreate):
     """Create a new chat."""
-    return await chat_service.create_chat(chat)
+    try:
+        return await chat_service.create_chat(chat)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/chats/", response_model=List[ChatRead])
 async def list_chats():
     """List all chats."""
-    return await chat_service.list_chats()
+    try:
+        return await chat_service.list_chats()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/chats/{chat_id}/messages/", response_model=List[MessageRead])
@@ -72,5 +78,30 @@ async def search_documents(query: str):
     """Search for similar documents."""
     try:
         return await chat_service.search_similar_documents(query)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    """Delete a document from the RAG system."""
+    try:
+        success = await chat_service.delete_document(doc_id)
+        if success:
+            return {"message": "Document deleted successfully"}
+        raise HTTPException(status_code=404, detail="Document not found")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/documents/{doc_id}", response_model=DocumentRead)
+async def update_document(doc_id: str, document: DocumentCreate):
+    """Update a document in the RAG system."""
+    try:
+        return await chat_service.update_document(doc_id, document)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,36 +1,76 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from typing import List
 from app.services.chat_service import ChatService
+from app.models import (
+    ChatCreate,
+    ChatRead,
+    MessageCreate,
+    MessageRead,
+    DocumentCreate,
+    DocumentRead,
+)
 
 router = APIRouter()
 chat_service = ChatService()
 
 
-class Document(BaseModel):
-    content: str
+# Chat endpoints
+@router.post("/chats/", response_model=ChatRead)
+async def create_chat(chat: ChatCreate):
+    """Create a new chat."""
+    return await chat_service.create_chat(chat)
 
 
-class Message(BaseModel):
-    content: str
-    role: str = "user"
+@router.get("/chats/", response_model=List[ChatRead])
+async def list_chats():
+    """List all chats."""
+    return await chat_service.list_chats()
 
 
-@router.post("/documents/")
-async def add_document(document: Document):
+@router.get("/chats/{chat_id}/messages/", response_model=List[MessageRead])
+async def get_chat_messages(chat_id: str):
+    """Get all messages in a chat."""
+    try:
+        return await chat_service.get_chat_messages(chat_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/chats/{chat_id}/messages/", response_model=MessageRead)
+async def add_message(chat_id: str, content: str, role: str = "user"):
+    """Add a message to a chat and get AI response."""
+    try:
+        message = MessageCreate(content=content, role=role, chat_id=chat_id)
+        return await chat_service.add_message(message)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Document endpoints
+@router.post("/documents/", response_model=DocumentRead)
+async def add_document(document: DocumentCreate):
     """Add a document to the RAG system."""
-    result = await chat_service.add_document(document.content)
-    if result["status"] == "error":
-        raise HTTPException(status_code=400, detail=result["message"])
-    return result
+    try:
+        return await chat_service.add_document(document)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/messages/")
-async def send_message(message: Message):
-    """Send a message and get an AI response."""
-    return await chat_service.send_message(message.content, message.role)
+@router.get("/documents/", response_model=List[DocumentRead])
+async def list_documents():
+    """List all documents."""
+    try:
+        return await chat_service.list_documents()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/search/")
+@router.get("/documents/search/", response_model=List[DocumentRead])
 async def search_documents(query: str):
     """Search for similar documents."""
-    return await chat_service.search_similar_documents(query)
+    try:
+        return await chat_service.search_similar_documents(query)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

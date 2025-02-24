@@ -187,10 +187,16 @@ class ChatService:
 
         # Get AI response
         try:
-            query_engine = self.index.as_query_engine(
-                similarity_top_k=3
+            chat_engine = self.index.as_chat_engine(
+                chat_mode="context",
+                system_prompt=(
+                    "You are a helpful AI assistant. Use the provided context to answer "
+                    "questions about FastAPI and related technologies. If the context doesn't "
+                    "contain enough information, say so and provide general information about "
+                    "the topic if possible. Be concise but informative."
+                ),
             )
-            response = query_engine.query(message.content)
+            response = chat_engine.chat(message.content)
 
             # Add AI response
             ai_message = {

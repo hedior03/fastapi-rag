@@ -79,4 +79,9 @@ test-chat:
 	echo "\nSending a message..." && \
 	curl -X POST "http://localhost:8000/api/v1/chat/chats/$$CHAT_ID/messages/?content=What+can+you+tell+me+about+FastAPI%3F&role=user" \
 		-H "Content-Type: application/json" \
+		| jq '.' && \
+	echo "\nGetting chat messages (including AI response)..." && \
+	sleep 2 && \
+	curl -s "http://localhost:8000/api/v1/chat/chats/$$CHAT_ID/messages/" \
+		-H "Content-Type: application/json" \
 		| jq '.' 

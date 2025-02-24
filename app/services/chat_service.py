@@ -1,13 +1,13 @@
 from typing import List, Optional, Dict
 from datetime import datetime
 import uuid
-from llama_index.core import VectorStoreIndex, ServiceContext, Document
+from llama_index.core import VectorStoreIndex, Document, Settings
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from app.core.config import settings
+from app.core.config import settings as app_settings
 from app.models import (
     ChatCreate,
     ChatRead,
@@ -20,37 +20,50 @@ from app.models import (
 
 class ChatService:
     def __init__(self):
-        # Initialize Qdrant client
-        self.qdrant_client = QdrantClient(
-            host=settings.QDRANT_HOST, port=settings.QDRANT_PORT
-        )
+        self._qdrant_client = None
+        self._vector_store = None
+        self._embed_model = None
+        self._llm = None
+        self._index = None
 
-        # Create collections if they don't exist
-        self._init_collections()
+    @property
+    def qdrant_client(self):
+        if self._qdrant_client is None:
+            self._qdrant_client = QdrantClient(
+                host=app_settings.QDRANT_HOST, port=app_settings.QDRANT_PORT
+            )
+            self._init_collections()
+        return self._qdrant_client
 
-        # Initialize vector store
-        self.vector_store = QdrantVectorStore(
-            client=self.qdrant_client, collection_name="documents"
-        )
+    @property
+    def vector_store(self):
+        if self._vector_store is None:
+            self._vector_store = QdrantVectorStore(
+                client=self.qdrant_client, collection_name="documents"
+            )
+        return self._vector_store
 
-        # Initialize embedding model
-        self.embed_model = OpenAIEmbedding()
+    @property
+    def embed_model(self):
+        if self._embed_model is None:
+            self._embed_model = OpenAIEmbedding()
+        return self._embed_model
 
-        # Initialize LLM
-        self.llm = OpenAI(api_key=settings.OPENAI_API_KEY, model="gpt-3.5-turbo")
+    @property
+    def llm(self):
+        if self._llm is None:
+            self._llm = OpenAI(api_key=app_settings.OPENAI_API_KEY, model="gpt-3.5-turbo")
+        return self._llm
 
-        # Create service context
-        self.service_context = ServiceContext.from_defaults(
-            llm=self.llm, embed_model=self.embed_model
-        )
-
-        # Initialize index
-        self.index = VectorStoreIndex.from_vector_store(
-            vector_store=self.vector_store, service_context=self.service_context
-        )
-
-        # Initialize chat engines dict
-        self.chat_engines = {}
+    @property
+    def index(self):
+        if self._index is None:
+            Settings.llm = self.llm
+            Settings.embed_model = self.embed_model
+            self._index = VectorStoreIndex.from_vector_store(
+                vector_store=self.vector_store
+            )
+        return self._index
 
     def _init_collections(self):
         """Initialize Qdrant collections."""
@@ -175,7 +188,7 @@ class ChatService:
         # Get AI response
         try:
             query_engine = self.index.as_query_engine(
-                service_context=self.service_context, similarity_top_k=3
+                similarity_top_k=3
             )
             response = query_engine.query(message.content)
 

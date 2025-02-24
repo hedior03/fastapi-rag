@@ -1,4 +1,4 @@
-.PHONY: dev docker-up docker-down docker-build clean up down build logs test-chat test-documents test-all wait-for-services
+.PHONY: dev docker-up docker-down docker-build clean up down build logs test-chat test-documents test-e2e test-all wait-for-services
 
 # Development server
 dev:
@@ -77,6 +77,7 @@ help:
 	@echo "  make clean           - Remove Python cache files"
 	@echo "  make test-chat       - Run chat functionality tests"
 	@echo "  make test-documents  - Run document management tests"
+	@echo "  make test-e2e       - Run end-to-end tests"
 	@echo "  make test-all        - Run all tests"
 	@echo "  make help            - Show this help message"
 
@@ -143,4 +144,8 @@ test-documents: wait-for-services
 		-H "Content-Type: application/json" \
 		| jq '.'
 
-test-all: wait-for-services test-chat test-documents 
+test-e2e: wait-for-services
+	@echo "Running end-to-end tests..."
+	.venv/bin/python -m pytest tests/test_e2e.py -v
+
+test-all: wait-for-services test-chat test-documents test-e2e 

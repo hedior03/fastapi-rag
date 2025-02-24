@@ -45,4 +45,40 @@ help:
 	@echo "  make docker-build    - Build Docker images"
 	@echo "  make docker-down-v   - Stop containers and remove volumes"
 	@echo "  make clean           - Remove Python cache files"
-	@echo "  make help            - Show this help message" 
+	@echo "  make help            - Show this help message"
+
+.PHONY: up down build logs test-chat
+
+up:
+	docker-compose up -d
+
+down:
+	docker-compose down
+
+build:
+	docker-compose build
+
+logs:
+	docker-compose logs -f
+
+test-chat:
+	@echo "Creating a new chat..."
+	@curl -X POST http://localhost:8000/api/v1/chat/chats/ \
+		-H "Content-Type: application/json" \
+		-d '{"title": "Test Chat", "description": "Testing RAG capabilities"}' \
+		| jq '.'
+	@echo "\nAdding a document..."
+	@curl -X POST http://localhost:8000/api/v1/chat/documents/ \
+		-H "Content-Type: application/json" \
+		-d '{"content": "FastAPI is a modern, fast (high-performance) web framework for building APIs with Python 3.8+ based on standard Python type hints."}' \
+		| jq '.'
+	@echo "\nSending a message..."
+	@curl -X POST http://localhost:8000/api/v1/chat/chats/1/messages/ \
+		-H "Content-Type: application/json" \
+		-d '{"content": "What can you tell me about FastAPI?", "role": "user"}' \
+		| jq '.'
+
+clean:
+	docker-compose down -v
+	rm -rf __pycache__
+	rm -rf .pytest_cache 

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.db.base import init_db
+from app.api.v1.endpoints import chat
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -18,10 +18,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize database
-@app.on_event("startup")
-async def on_startup():
-    init_db()
 
 # Root endpoint
 @app.get("/")
@@ -32,6 +28,6 @@ async def root():
         "docs_url": "/docs",
     }
 
-# Include API router
-# from app.api.v1.api import api_router
-# app.include_router(api_router, prefix=settings.API_V1_STR) 
+
+# Include routers
+app.include_router(chat.router, prefix=f"{settings.API_V1_STR}/chat", tags=["chat"])

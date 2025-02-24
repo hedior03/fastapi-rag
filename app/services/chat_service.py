@@ -58,7 +58,7 @@ class ChatService:
     @property
     def llm(self):
         if self._llm is None:
-            self._llm = OpenAI(api_key=app_settings.OPENAI_API_KEY, model="gpt-3.5-turbo")
+            self._llm = OpenAI(api_key=app_settings.OPENAI_API_KEY, model="gpt-4o-mini")
         return self._llm
 
     @property
@@ -348,30 +348,56 @@ class ChatService:
     async def search_similar_documents(self, query: str) -> List[DocumentRead]:
         """Search for similar documents."""
         try:
-            query_engine = self.index.as_query_engine(similarity_top_k=5)
-            response = query_engine.query(query)
+            # Get embeddings for the query
+            query_embedding = self.embed_model.get_text_embedding(query)
+            print(f"Generated query embedding of size: {len(query_embedding)}")
+
+            # Search in Qdrant
+            search_result = self.qdrant_client.search(
+                collection_name="documents",
+                query_vector=query_embedding,
+                limit=5,
+                with_payload=True,
+            )
+            print(f"Found {len(search_result)} search results")
 
             documents = []
-            if hasattr(response, "source_nodes"):
-                for node in response.source_nodes:
-                    doc_metadata = node.metadata
-                    if "id" in doc_metadata and "created_at" in doc_metadata:
+            for point in search_result:
+                print(f"Processing point with score: {point.score}")
+                metadata = point.payload.get("metadata", {})
+                doc_id = metadata.get("id")
+                created_at_str = metadata.get("created_at")
+                print(f"Point metadata: {metadata}")
+                print(f"Point payload: {point.payload}")
+                
+                if doc_id and created_at_str:
+                    try:
+                        created_at = datetime.fromisoformat(created_at_str)
+                        # Filter out internal metadata
+                        filtered_metadata = {
+                            k: v for k, v in metadata.items() 
+                            if k not in ["id", "created_at"]
+                        }
+                        
                         documents.append(
                             DocumentRead(
-                                id=doc_metadata["id"],
-                                content=node.text,
-                                metadata={
-                                    k: v
-                                    for k, v in doc_metadata.items()
-                                    if k not in ["id", "created_at"]
-                                },
-                                created_at=datetime.fromisoformat(
-                                    doc_metadata["created_at"]
-                                ),
+                                id=doc_id,
+                                content=point.payload.get("text", ""),
+                                metadata=filtered_metadata,
+                                created_at=created_at,
                             )
                         )
+                        print(f"Added document with ID: {doc_id}")
+                    except (ValueError, TypeError) as e:
+                        print(f"Error processing document: {e}")
+                        continue  # Skip invalid documents
+                else:
+                    print(f"Missing required metadata. doc_id: {doc_id}, created_at: {created_at_str}")
+
+            print(f"Returning {len(documents)} documents")
             return documents
         except Exception as e:
+            print(f"Search error: {str(e)}")
             raise ValueError(f"Failed to search documents: {str(e)}")
 
     async def delete_document(self, doc_id: str) -> bool:

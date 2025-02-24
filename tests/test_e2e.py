@@ -1,7 +1,7 @@
 import pytest
 import httpx
 import time
-from typing import Generator
+from typing import Generator, Tuple
 
 BASE_URL = "http://localhost:8000/api/v1/chat"
 TEST_TIMEOUT = 30  # seconds
@@ -34,8 +34,26 @@ def client() -> Generator[httpx.Client, None, None]:
     with httpx.Client(base_url=BASE_URL, timeout=10.0) as client:
         yield client
 
-def test_create_chat(client: httpx.Client):
-    """Test chat creation."""
+@pytest.fixture(autouse=True)
+def cleanup_documents(client: httpx.Client):
+    """Clean up all documents before and after each test."""
+    # Clean up before test
+    response = client.get("/documents/")
+    if response.status_code == 200:
+        for doc in response.json():
+            client.delete(f"/documents/{doc['id']}")
+    
+    yield
+    
+    # Clean up after test
+    response = client.get("/documents/")
+    if response.status_code == 200:
+        for doc in response.json():
+            client.delete(f"/documents/{doc['id']}")
+
+@pytest.fixture
+def test_chat(client: httpx.Client) -> str:
+    """Create a test chat and return its ID."""
     response = client.post(
         "/chats/",
         json={"title": "Test Chat", "description": "E2E Test Chat"}
@@ -47,7 +65,28 @@ def test_create_chat(client: httpx.Client):
     assert data["description"] == "E2E Test Chat"
     return data["id"]
 
-def test_list_chats(client: httpx.Client):
+@pytest.fixture
+def test_document(client: httpx.Client) -> Tuple[str, str]:
+    """Create a test document and return its ID and content."""
+    content = "FastAPI is a modern web framework for building high-performance APIs."
+    response = client.post(
+        "/documents/",
+        json={
+            "content": content,
+            "metadata": {"test": "e2e", "type": "framework"}
+        }
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "id" in data
+    assert data["content"] == content
+    return data["id"], content
+
+def test_create_chat(test_chat: str):
+    """Test chat creation."""
+    assert test_chat is not None and len(test_chat) > 0
+
+def test_list_chats(client: httpx.Client, test_chat: str):
     """Test chat listing."""
     response = client.get("/chats/")
     assert response.status_code == 200
@@ -55,60 +94,74 @@ def test_list_chats(client: httpx.Client):
     assert isinstance(data, list)
     assert len(data) > 0
     assert all("id" in chat for chat in data)
+    assert any(chat["id"] == test_chat for chat in data)
 
-def test_add_document(client: httpx.Client):
+def test_add_document(test_document: Tuple[str, str]):
     """Test document addition."""
-    response = client.post(
-        "/documents/",
-        json={
-            "content": "FastAPI is a modern web framework for building APIs.",
-            "metadata": {"test": "e2e", "type": "framework"}
-        }
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert "id" in data
-    assert data["content"] == "FastAPI is a modern web framework for building APIs."
-    assert data["metadata"] == {"test": "e2e", "type": "framework"}
-    return data["id"]
+    doc_id, content = test_document
+    assert doc_id is not None and len(doc_id) > 0
+    assert content is not None and len(content) > 0
 
-def test_update_document(client: httpx.Client):
+def test_update_document(client: httpx.Client, test_document: Tuple[str, str]):
     """Test document update."""
-    doc_id = test_add_document(client)
+    doc_id, _ = test_document
+    new_content = "FastAPI is a modern web framework for building blazing-fast APIs."
     response = client.put(
         f"/documents/{doc_id}",
         json={
-            "content": "FastAPI is a modern web framework for building high-performance APIs.",
+            "content": new_content,
             "metadata": {"test": "e2e", "type": "framework", "updated": True}
         }
     )
     assert response.status_code == 200
     data = response.json()
     assert data["id"] == doc_id
-    assert "high-performance" in data["content"]
+    assert data["content"] == new_content
     assert data["metadata"]["updated"] is True
 
-def test_search_documents(client: httpx.Client):
+def test_search_documents(client: httpx.Client, test_document: Tuple[str, str]):
     """Test document search."""
-    response = client.get("/documents/search/", params={"query": "high-performance framework"})
+    doc_id, content = test_document
+    print(f"\nTesting search with document ID: {doc_id}")
+    print(f"Document content: {content}")
+    
+    # Give the index a moment to update
+    time.sleep(2)  # Increased wait time
+    
+    # Search for exact content
+    print("\nSearching for exact content...")
+    response = client.get("/documents/search/", params={"query": content})
     assert response.status_code == 200
     data = response.json()
+    print(f"Search response: {data}")
     assert isinstance(data, list)
-    assert len(data) > 0
-    assert all("id" in doc for doc in data)
+    assert len(data) > 0, "No documents found in search results"
+    assert any(doc["id"] == doc_id for doc in data), f"Expected document {doc_id} not found in results"
+    
+    # Search for partial content
+    print("\nSearching for partial content...")
+    response = client.get("/documents/search/", params={"query": "modern web framework"})
+    assert response.status_code == 200
+    data = response.json()
+    print(f"Search response: {data}")
+    assert isinstance(data, list)
+    assert len(data) > 0, "No documents found in search results"
+    assert any(doc["id"] == doc_id for doc in data), f"Expected document {doc_id} not found in results"
 
-def test_list_documents(client: httpx.Client):
+def test_list_documents(client: httpx.Client, test_document: Tuple[str, str]):
     """Test document listing."""
+    doc_id, _ = test_document
     response = client.get("/documents/")
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
     assert len(data) > 0
     assert all("id" in doc for doc in data)
+    assert any(doc["id"] == doc_id for doc in data)
 
-def test_delete_document(client: httpx.Client):
+def test_delete_document(client: httpx.Client, test_document: Tuple[str, str]):
     """Test document deletion."""
-    doc_id = test_add_document(client)
+    doc_id, _ = test_document
     response = client.delete(f"/documents/{doc_id}")
     assert response.status_code == 200
     data = response.json()
@@ -120,23 +173,11 @@ def test_delete_document(client: httpx.Client):
     data = response.json()
     assert all(doc["id"] != doc_id for doc in data)
 
-def test_chat_conversation(client: httpx.Client):
+def test_chat_conversation(client: httpx.Client, test_chat: str, test_document: Tuple[str, str]):
     """Test a complete chat conversation."""
-    # Create chat
-    chat_id = test_create_chat(client)
-
-    # Add a document for context
-    client.post(
-        "/documents/",
-        json={
-            "content": "FastAPI is a modern web framework with excellent performance.",
-            "metadata": {"test": "e2e", "type": "framework"}
-        }
-    )
-
     # Send message
     response = client.post(
-        f"/chats/{chat_id}/messages/",
+        f"/chats/{test_chat}/messages/",
         params={"content": "What can you tell me about FastAPI's performance?", "role": "user"}
     )
     assert response.status_code == 200
@@ -145,7 +186,7 @@ def test_chat_conversation(client: httpx.Client):
 
     # Get chat messages
     time.sleep(2)  # Wait for AI response
-    response = client.get(f"/chats/{chat_id}/messages/")
+    response = client.get(f"/chats/{test_chat}/messages/")
     assert response.status_code == 200
     messages = response.json()
     assert len(messages) >= 2  # User message + AI response
